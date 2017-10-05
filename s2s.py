@@ -48,44 +48,43 @@ http://www.manythings.org/anki/
     RNN Encoder-Decoder for Statistical Machine Translation
     https://arxiv.org/abs/1406.1078
 '''
+
 from __future__ import print_function
 
+import numpy as np
 from keras.models import Model
 from keras.layers import Input, LSTM, Dense, Embedding
+from keras.utils import plot_model
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
-import numpy as np
+from random import shuffle
 
 batch_size = 64  # Batch size for training.
-epochs = 100  # Number of epochs to train for.
+epochs = 500  # Number of epochs to train for.
 latent_dim = 256  # Latent dimensionality of the encoding space.
-num_samples = 1000  # Number of samples to train on.
+num_samples = 300  # Number of samples to train on.
 # Path to the data txt file on disk.
-data_path = 'fin.txt'
-num_words = 300 # TODO calculate this
+data_path = 'data.txt'
+num_words = 2000
 
 # Vectorize the data.
 input_texts = []
 target_texts = []
-input_characters = set()
-target_characters = set()
 lines = open(data_path).read().split('\n')
+shuffle(lines)
 for line in lines[: min(num_samples, len(lines) - 1)]:
     input_text, target_text = line.split('\t')
-    target_text = 'TSTART ' + target_text + ' TSTOP'
+    target_text = '§SSSTART ' + target_text + ' §SSSTOP'
     input_texts.append(input_text)
     target_texts.append(target_text)
 
-input_tokenizer = Tokenizer(num_words=num_words, lower=False, split=" ", filters='')
+input_tokenizer = Tokenizer(num_words=num_words, lower=False, split=' ', filters='')
 input_tokenizer.fit_on_texts(input_texts)
 input_word_index = input_tokenizer.word_index
-target_tokenizer = Tokenizer(num_words=num_words, lower=False, split=" ", filters='')
+target_tokenizer = Tokenizer(num_words=num_words, lower=False, split=' ', filters='')
 target_tokenizer.fit_on_texts(target_texts)
 target_word_index = target_tokenizer.word_index
 
-
-input_characters = sorted(list(input_characters))
-target_characters = sorted(list(target_characters))
 num_encoder_tokens = num_words # len(input_word_index)
 num_decoder_tokens = num_words # len(target_word_index)
 max_encoder_seq_length = max([len(txt.split(' ')) for txt in input_texts])
@@ -98,19 +97,7 @@ print('Max sequence length for inputs:', max_encoder_seq_length)
 print('Max sequence length for outputs:', max_decoder_seq_length)
 
 encoder_input_data = pad_sequences(input_tokenizer.texts_to_sequences(input_texts), maxlen=max_encoder_seq_length)
-
 decoder_input_data = pad_sequences(target_tokenizer.texts_to_sequences(target_texts), maxlen=max_decoder_seq_length)
-# input_token_index = dict(
-#     [(char, i) for i, char in enumerate(input_characters)])
-# target_token_index = dict(
-#     [(char, i) for i, char in enumerate(target_characters)])
-
-# encoder_input_data = np.zeros(
-#     (len(input_texts), max_encoder_seq_length, num_encoder_tokens),
-#     dtype='float32')
-# decoder_input_data = np.zeros(
-#     (len(input_texts), max_decoder_seq_length, num_decoder_tokens),
-#     dtype='float32')
 decoder_target_data = np.zeros(
     (len(input_texts), max_decoder_seq_length, num_decoder_tokens),
     dtype='float32')
@@ -120,12 +107,7 @@ for i, target_text in enumerate(target_texts):
         if t > 0:
             # decoder_target_data will be ahead by one timestep
             # and will not include the start character.
-            
-            # HACK
-            if target_word_index[word] > num_words:
-              continue
-            else:
-              decoder_target_data[i, t - 1, target_word_index[word] - 1] = 1.
+            decoder_target_data[i, t - 1, target_word_index[word] - 1] = 1.
 
 # Define an input sequence and process it.
 encoder_inputs = Input(shape=(None,))
@@ -136,9 +118,11 @@ encoder_states = [state_h, state_c]
 
 # Set up the decoder, using `encoder_states` as initial state.
 decoder_inputs = Input(shape=(None,))
-x = Embedding(num_decoder_tokens, latent_dim)(decoder_inputs)
-x = LSTM(latent_dim, return_sequences=True)(x, initial_state=encoder_states)
-decoder_outputs = Dense(num_decoder_tokens, activation='softmax')(x)
+x_emb = Embedding(num_decoder_tokens, latent_dim)(decoder_inputs)
+x_tmp = LSTM(latent_dim, return_state=True, return_sequences=True, name='Foobar')
+x, _, _ = x_tmp(x_emb, initial_state=encoder_states)
+decoder_dense = Dense(num_decoder_tokens, activation='softmax')
+decoder_outputs = decoder_dense(x)
 
 # Define the model that will turn
 # `encoder_input_data` & `decoder_input_data` into `decoder_target_data`
@@ -146,90 +130,88 @@ model = Model([encoder_inputs, decoder_inputs], decoder_outputs)
 
 # Compile & run training
 model.compile(optimizer='rmsprop', loss='categorical_crossentropy')
+plot_model(model, to_file='model.png')
 # Note that `decoder_target_data` needs to be one-hot encoded,
 # rather than sequences of integers like `decoder_input_data`!
 model.fit([encoder_input_data, decoder_input_data], decoder_target_data,
           batch_size=batch_size,
-          epochs=epochs,
-          shuffle=True,
-          validation_split=0.2)
+          epochs=epochs)
 
-# # Save model
-# model.save('s2s.h5')
+# Save model
+model.save('s2s.h5')
 
-# # Next: inference mode (sampling).
-# # Here's the drill:
-# # 1) encode input and retrieve initial decoder state
-# # 2) run one step of decoder with this initial state
-# # and a "start of sequence" token as target.
-# # Output will be the next target token
-# # 3) Repeat with the current target token and current states
+# Next: inference mode (sampling).
+# Here's the drill:
+# 1) encode input and retrieve initial decoder state
+# 2) run one step of decoder with this initial state
+# and a "start of sequence" token as target.
+# Output will be the next target token
+# 3) Repeat with the current target token and current states
 
-# # Define sampling models
-# encoder_model = Model(encoder_inputs, encoder_states)
+# Define sampling models
+encoder_model = Model(encoder_inputs, encoder_states)
 
-# decoder_state_input_h = Input(shape=(latent_dim,))
-# decoder_state_input_c = Input(shape=(latent_dim,))
-# decoder_states_inputs = [decoder_state_input_h, decoder_state_input_c]
-# decoder_outputs, state_h, state_c = decoder_lstm(
-#     decoder_inputs, initial_state=decoder_states_inputs)
-# decoder_states = [state_h, state_c]
-# decoder_outputs = decoder_dense(decoder_outputs)
-# decoder_model = Model(
-#     [decoder_inputs] + decoder_states_inputs,
-#     [decoder_outputs] + decoder_states)
+decoder_state_input_h = Input(shape=(latent_dim,))
+decoder_state_input_c = Input(shape=(latent_dim,))
+decoder_states_inputs = [decoder_state_input_h, decoder_state_input_c]
+decoder_outputs, state_h, state_c = x_tmp(
+    x_emb, initial_state=decoder_states_inputs)
+decoder_states = [state_h, state_c]
+decoder_outputs = decoder_dense(decoder_outputs)
+decoder_model = Model(
+    [decoder_inputs] + decoder_states_inputs,
+    [decoder_outputs] + decoder_states)
 
-# # Reverse-lookup token index to decode sequences back to
-# # something readable.
-# reverse_input_char_index = dict(
-#     (i, char) for char, i in input_token_index.items())
-# reverse_target_char_index = dict(
-#     (i, char) for char, i in target_token_index.items())
+# Reverse-lookup token index to decode sequences back to
+# something readable.
+reverse_input_word_index = dict(
+    (i, word) for word, i in input_word_index.items())
+reverse_target_word_index = dict(
+    (i, word) for word, i in target_word_index.items())
 
 
-# def decode_sequence(input_seq):
-#     # Encode the input as state vectors.
-#     states_value = encoder_model.predict(input_seq)
+def decode_sequence(input_seq):
+    # Encode the input as state vectors.
+    states_value = encoder_model.predict(input_seq)
 
-#     # Generate empty target sequence of length 1.
-#     target_seq = np.zeros((1, 1, num_decoder_tokens))
-#     # Populate the first character of target sequence with the start character.
-#     target_seq[0, 0, target_token_index['\t']] = 1.
+    # Generate empty target sequence of length 1.
+    target_seq = np.array([[target_word_index['§SSSTART']]]) #np.zeros((1,num_decoder_tokens))
+    # # Populate the first character of target sequence with the start character.
+    # target_seq[0, target_word_index['§SSSTART'] - 1] = 1.
 
-#     # Sampling loop for a batch of sequences
-#     # (to simplify, here we assume a batch of size 1).
-#     stop_condition = False
-#     decoded_sentence = ''
-#     while not stop_condition:
-#         output_tokens, h, c = decoder_model.predict(
-#             [target_seq] + states_value)
+    # Sampling loop for a batch of sequences
+    # (to simplify, here we assume a batch of size 1).
+    stop_condition = False
+    decoded_sentence = ''
+    sentence_length = 0
+    while not stop_condition:
+        output_words, h, c = decoder_model.predict(
+            [target_seq] + states_value)
 
-#         # Sample a token
-#         sampled_token_index = np.argmax(output_tokens[0, -1, :])
-#         sampled_char = reverse_target_char_index[sampled_token_index]
-#         decoded_sentence += sampled_char
+        # Sample a token
+        sampled_word_index = np.argmax(output_words[0, -1, :])
+        sampled_word = reverse_target_word_index[sampled_word_index+1] # TODO check
+        decoded_sentence += ' ' + sampled_word
+        sentence_length += 1
+        # Exit condition: either hit max length
+        # or find stop character.
+        if (sampled_word == '§SSSTOP' or
+           sentence_length > max_decoder_seq_length):
+            stop_condition = True
 
-#         # Exit condition: either hit max length
-#         # or find stop character.
-#         if (sampled_char == '\n' or
-#            len(decoded_sentence) > max_decoder_seq_length):
-#             stop_condition = True
+        target_seq = np.array([[target_word_index[sampled_word]]]) 
 
-#         # Update the target sequence (of length 1).
-#         target_seq = np.zeros((1, 1, num_decoder_tokens))
-#         target_seq[0, 0, sampled_token_index] = 1.
+        # Update states
+        states_value = [h, c]
 
-#         # Update states
-#         states_value = [h, c]
-
-#     return decoded_sentence
+    return decoded_sentence
 
 
-# for seq_index in range(100):
-#     # Take one sequence (part of the training test)
-#     # for trying out decoding.
-#     input_seq = encoder_input_data[seq_index: seq_index + 1]
-#     decoded_sentence = decode_sequence(input_seq)
-#     print('-')
-#     print('Input sentence:', input_texts[seq_index])
-#     print('Decoded sentence:', decoded_sentence)
+for seq_index in range(20):
+    # Take one sequence (part of the training test)
+    # for trying out decoding.
+    input_seq = encoder_input_data[seq_index: seq_index + 1]
+    decoded_sentence = decode_sequence(input_seq)
+    print('-')
+    print('Input sentence:', input_texts[seq_index])
+    print('Decoded sentence:', decoded_sentence)
