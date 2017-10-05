@@ -119,7 +119,7 @@ encoder_states = [state_h, state_c]
 # Set up the decoder, using `encoder_states` as initial state.
 decoder_inputs = Input(shape=(None,))
 x_emb = Embedding(num_decoder_tokens, latent_dim)(decoder_inputs)
-x_tmp = LSTM(latent_dim, return_state=True, return_sequences=True, name='Foobar')
+x_tmp = LSTM(latent_dim, return_state=True, return_sequences=True)
 x, _, _ = x_tmp(x_emb, initial_state=encoder_states)
 decoder_dense = Dense(num_decoder_tokens, activation='softmax')
 decoder_outputs = decoder_dense(x)
